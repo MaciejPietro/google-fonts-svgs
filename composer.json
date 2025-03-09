@@ -1,0 +1,6 @@
+{
+  "require": {
+    "illuminate/view": "^8.0|^9.0|^10.0",
+    "eftec/bladeone": "^4.18"
+  }
+}

@@ -1,0 +1,6 @@
+@import "tailwindcss";
+@plugin "daisyui";
+
+.custom-checkbox {
+  @apply size-5 cursor-pointer rounded-sm border-none;
+}
