@@ -12,3 +12,8 @@ Download google fonts as svg. It leverages blade as template engine, vite as bun
 ## Usage
 
 Work on `http://localhost:8000/`. Idk why `http://localhost:5173/` dont work
+
+
+## Preview
+
+<img src="https://raw.githubusercontent.com/MaciejPietro/google-fonts-svgs/refs/heads/main/preview.png" alt="" />
