@@ -25,6 +25,7 @@ Alpine.data("app", () => ({
   strokeWidth: "1",
   strokeNonScaling: false,
   fillRule: "nonzero",
+  chunkSize: 100,
 
   async init() {
     const fontLoader = new FontLoader();
@@ -64,6 +65,33 @@ Alpine.data("app", () => ({
     });
   },
 
+  currentChunkIndex: null,
+
+  selectNextChunk() {
+    const chunkSize = this.chunkSize;
+    // Reset all selections first
+    this.fontsList.forEach((font) => {
+      this.selectedFonts[font.family] = false;
+    });
+
+    // Calculate indices for the new chunk
+    const startIndex = this.currentChunkIndex * chunkSize;
+    const endIndex = startIndex + chunkSize;
+    const chunk = this.fontsList.slice(startIndex, endIndex);
+
+    // Select only fonts in the current chunk
+    chunk.forEach((font) => {
+      this.selectedFonts[font.family] = true;
+    });
+
+    this.currentChunkIndex++;
+
+    // If we've gone through all fonts, reset to beginning
+    if (startIndex >= this.fontsList.length) {
+      this.currentChunkIndex = 0;
+    }
+  },
+
   // Update the allFontsSelected state based on individual selections
   updateAllFontsSelectedState() {
     // Check if all fonts are selected
@@ -96,6 +124,7 @@ Alpine.data("app", () => ({
     const zip = new JSZip();
     const fontsList = [];
     const promises = [];
+    const skippedFonts = [];
 
     // Process each selected font
     for (const font of selectedFonts) {
@@ -115,6 +144,10 @@ Alpine.data("app", () => ({
         console.log(
           `Skipping font ${font.family}: variant ${targetVariant} not available and no fallback used`
         );
+        skippedFonts.push({
+          family: font.family,
+          reason: `Variant ${targetVariant} not available and no fallback used`,
+        });
         continue;
       }
 
@@ -137,28 +170,20 @@ Alpine.data("app", () => ({
           variantToUse
         );
 
-        // Add to fonts list for JSON
-        fontsList.push({
-          family: font.family,
-          variant: variantToUse,
-          filename: filename,
-          originalVariantRequested: targetVariant,
-          isFallback: variantToUse !== targetVariant,
-          fontUrl: url, // Original font file URL
-          googleFontsUrl: googleFontUrl, // Google Fonts download URL
-        });
-
         // Load the font using opentype.js
         load(url, (err, fontData) => {
           // Restore the original selected variant
           this.selectedVariant = tempSelectedVariant;
 
           if (err) {
-            this.handleError(
-              err,
-              `font loading: ${font.family} ${variantToUse}`
+            console.error(
+              `Error loading font ${font.family}: ${err.message || err}`
             );
-            resolve(); // Continue with other fonts even if one fails
+            skippedFonts.push({
+              family: font.family,
+              reason: `Font loading error: ${err.message || err}`,
+            });
+            resolve(); // Skip this font and continue with others
             return;
           }
 
@@ -168,7 +193,7 @@ Alpine.data("app", () => ({
             // Use the target size for rendering
             this.size = targetSize;
 
-            const textModel = this.createTextModel(fontData);
+            const textModel = this.createTextModel(fontData, font.family);
             const svg = this.generateSvg(textModel);
 
             // Restore original size
@@ -176,13 +201,30 @@ Alpine.data("app", () => ({
 
             // Add the SVG to the zip file
             zip.file(filename, svg);
+
+            // Add to fonts list for JSON
+            fontsList.push({
+              family: font.family,
+              variant: variantToUse,
+              filename: filename,
+              originalVariantRequested: targetVariant,
+              isFallback: variantToUse !== targetVariant,
+              fontUrl: url, // Original font file URL
+              googleFontsUrl: googleFontUrl, // Google Fonts download URL
+            });
+
             resolve();
           } catch (error) {
-            this.handleError(
-              error,
-              `SVG generation: ${font.family} ${variantToUse}`
+            console.error(
+              `Error generating SVG for ${font.family}: ${
+                error.message || error
+              }`
             );
-            resolve(); // Continue with other fonts even if one fails
+            skippedFonts.push({
+              family: font.family,
+              reason: `SVG generation error: ${error.message || error}`,
+            });
+            resolve(); // Skip this font and continue with others
           }
         });
       });
@@ -200,8 +242,11 @@ Alpine.data("app", () => ({
         JSON.stringify(
           {
             fonts: fontsList,
+            skippedFonts: skippedFonts,
             generatedAt: new Date().toISOString(),
             totalFonts: fontsList.length,
+            totalSkipped: skippedFonts.length,
+            chunkIndex: this.currentChunkIndex - 1, // Include the chunk index (subtract 1 because it was incremented)
             settings: {
               selectedVariant: targetVariant,
               size: targetSize,
@@ -224,11 +269,12 @@ Alpine.data("app", () => ({
         )
       );
 
-      // Generate the zip file
+      // Generate the zip file with chunk index in the filename
       const zipContent = await zip.generateAsync({ type: "blob" });
 
-      // Download the zip file
-      saveAs(zipContent, "selected-fonts.zip");
+      // Include the chunk index in the zip filename
+      const chunkIndex = this.currentChunkIndex - 1; // Subtract 1 because it was incremented in selectNextChunk
+      saveAs(zipContent, `selected-fonts-chunk-${chunkIndex}.zip`);
     } catch (error) {
       this.handleError(error, "zip generation");
     }
@@ -271,10 +317,12 @@ Alpine.data("app", () => ({
   },
 
   // Create text model using makerjs
-  createTextModel(font) {
+  createTextModel(font, textToUse) {
+    // Use the font family name instead of the default text for SVG generation
+
     const textModel = new makerjs.models.Text(
       font,
-      this.text || this.selectedFont.family,
+      textToUse,
       this.size,
       this.union,
       false,
@@ -331,7 +379,8 @@ Alpine.data("app", () => ({
     }
 
     const url = this.getFontUrl(fontToUse);
-    const filename = `${this.text || fontToUse.family}.svg`;
+    // Use the font family name for the filename instead of this.text
+    const filename = `${fontToUse.family}.svg`;
 
     // Load the font using opentype.js
     load(url, (err, fontData) => {
@@ -341,7 +390,7 @@ Alpine.data("app", () => ({
       }
 
       try {
-        const textModel = this.createTextModel(fontData);
+        const textModel = this.createTextModel(fontData, fontToUse.family);
         const svg = this.generateSvg(textModel);
         this.triggerDownload(svg, filename, "image/svg+xml");
       } catch (error) {
@@ -351,5 +400,13 @@ Alpine.data("app", () => ({
   },
   get selectedFontsLength() {
     return Object.values(this.selectedFonts).filter(Boolean).length;
+  },
+  get selectedFromTo() {
+    if (this.currentChunkIndex === null) return "";
+    console.log(this.currentChunkIndex);
+
+    const startIndex = (this.currentChunkIndex - 1) * this.chunkSize;
+    const endIndex = startIndex + this.chunkSize;
+    return `${startIndex || "0"}-${endIndex || ""}`;
   },
 }));
